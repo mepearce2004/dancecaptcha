@@ -1,0 +1,427 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>DanceCAPTCHA</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"/>
+<link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=DM+Mono:wght@300;400;500&family=Syne:wght@400;700;800&display=swap" rel="stylesheet"/>
+<link rel="stylesheet" href="styles.css"/>
+</head>
+<body>
+
+<div class="cd-overlay" id="cdOverlay"><div class="cd-num" id="cdNum">3</div></div>
+
+<div class="success-screen" id="successScreen">
+  <div class="s-ring">
+    <svg width="42" height="42" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><polyline points="20 6 9 17 4 12"/></svg>
+  </div>
+  <div class="s-title">You're Human!</div>
+  <div class="s-sub">Identity verified · Access granted</div>
+  <button class="retry-btn" id="retryBtn">Try again</button>
+</div>
+
+<div class="page">
+
+  <header>
+    <div class="logo">Dance<span>CAPTCHA</span></div>
+    <div class="hdr-right">
+      <div class="pose-tally">POSES <strong id="scoreNum">0</strong>/3</div>
+      <div class="badge" id="badge">Waiting</div>
+    </div>
+  </header>
+
+  <section class="lane" id="lane">
+    <div class="lane-lbl">Incoming moves</div>
+    <div class="lane-lines"></div>
+    <div class="qdots" id="qdots"></div>
+    <div class="hit-zone" id="hitZone">
+      <div class="hz-label" id="hzLabel">get ready</div>
+    </div>
+  </section>
+
+  <section class="cam" id="cam">
+    <div class="cam-lbl">Your camera</div>
+    <video id="vid" autoplay playsinline muted></video>
+    <div class="scan" id="scan"></div>
+
+    <div class="cam-idle" id="camIdle">
+      <div class="cam-ring">
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="1.5">
+          <path d="M23 7l-7 5 7 5V7z"/><rect x="1" y="5" width="15" height="14" rx="2"/>
+        </svg>
+      </div>
+      <div class="cam-txt">Allow camera access<br/>to start the challenge</div>
+      <button class="allow-btn" id="allowBtn">Allow camera</button>
+    </div>
+
+    <div class="cam-ghost" id="camGhost">
+      <svg id="ghostSVG" viewBox="0 0 80 115" xmlns="http://www.w3.org/2000/svg"></svg>
+    </div>
+    <div class="cam-hint" id="camHint">
+      <div class="hint-chip" id="hintChip">Match this move</div>
+    </div>
+  </section>
+
+  <footer>
+    <div class="ft-tags">
+      <div class="ft-tag"><div class="ft-dot"></div>Teachable Machine</div>
+      <div class="ft-tag"><div class="ft-dot"></div>No data stored</div>
+      <div class="ft-tag"><div class="ft-dot"></div>Runs in-browser</div>
+    </div>
+    <div class="match-bar">
+      <div class="match-top"><span>Pose match</span><span id="matchPct">—</span></div>
+      <div class="match-track"><div class="match-fill" id="matchFill"></div></div>
+    </div>
+    <button class="start-btn" id="startBtn" disabled>Start</button>
+  </footer>
+
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.10.0/dist/tf.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@teachablemachine/pose@0.8/dist/teachablemachine-pose.min.js"></script>
+<script>
+/* ─── CONFIG ─── */
+const TM_MODEL_URL  = null;   // replace with your TM model URL
+const TOTAL_POSES   = 3;
+const HOLD_MS       = 2400;
+const MATCH_THRESH  = 0.72;
+const FALL_MS       = 3400;   // card fall duration
+
+/* ─── POSES ─── */
+const POSES = [
+  { id:'arms-out', name:'Arms Out', color:'#ff3de8',
+    draw(s){ s.innerHTML=`
+      <circle cx="40" cy="13" r="8" fill="currentColor"/>
+      <rect x="35" y="21" width="10" height="33" rx="4" fill="currentColor"/>
+      <rect x="4"  y="23" width="31" height="8"  rx="4" fill="currentColor"/>
+      <rect x="45" y="23" width="31" height="8"  rx="4" fill="currentColor"/>
+      <rect x="4"  y="17" width="9"  height="9"  rx="4" fill="currentColor"/>
+      <rect x="67" y="17" width="9"  height="9"  rx="4" fill="currentColor"/>
+      <rect x="34" y="53" width="8"  height="35" rx="4" fill="currentColor"/>
+      <rect x="38" y="53" width="8"  height="35" rx="4" fill="currentColor"/>
+      <rect x="29" y="86" width="8"  height="28" rx="4" fill="currentColor"/>
+      <rect x="43" y="86" width="8"  height="28" rx="4" fill="currentColor"/>` }
+  },
+  { id:'right-up', name:'Right Arm Up', color:'#3ddfff',
+    draw(s){ s.innerHTML=`
+      <circle cx="40" cy="13" r="8" fill="currentColor"/>
+      <rect x="35" y="21" width="10" height="33" rx="4" fill="currentColor"/>
+      <rect x="10" y="36" width="26" height="8"  rx="4" fill="currentColor"/>
+      <rect x="10" y="30" width="9"  height="9"  rx="4" fill="currentColor"/>
+      <rect x="43" y="2"  width="8"  height="30" rx="4" fill="currentColor" transform="rotate(-6 43 2)"/>
+      <rect x="43" y="1"  width="9"  height="9"  rx="4" fill="currentColor" transform="rotate(-6 43 1)"/>
+      <rect x="34" y="53" width="8"  height="35" rx="4" fill="currentColor"/>
+      <rect x="38" y="53" width="8"  height="35" rx="4" fill="currentColor"/>
+      <rect x="29" y="86" width="8"  height="28" rx="4" fill="currentColor"/>
+      <rect x="43" y="86" width="8"  height="28" rx="4" fill="currentColor"/>` }
+  },
+  { id:'victory', name:'Victory', color:'#ffe83d',
+    draw(s){ s.innerHTML=`
+      <circle cx="40" cy="13" r="8" fill="currentColor"/>
+      <rect x="35" y="21" width="10" height="33" rx="4" fill="currentColor"/>
+      <rect x="10" y="6"  width="32" height="8"  rx="4" fill="currentColor" transform="rotate(38 10 6)"/>
+      <rect x="38" y="6"  width="32" height="8"  rx="4" fill="currentColor" transform="rotate(-38 70 6)"/>
+      <rect x="5"  y="3"  width="10" height="10" rx="4" fill="currentColor"/>
+      <rect x="65" y="3"  width="10" height="10" rx="4" fill="currentColor"/>
+      <rect x="34" y="53" width="8"  height="35" rx="4" fill="currentColor"/>
+      <rect x="38" y="53" width="8"  height="35" rx="4" fill="currentColor"/>
+      <rect x="29" y="86" width="8"  height="28" rx="4" fill="currentColor"/>
+      <rect x="43" y="86" width="8"  height="28" rx="4" fill="currentColor"/>` }
+  },
+  { id:'hips', name:'Hands on Hips', color:'#3dff8f',
+    draw(s){ s.innerHTML=`
+      <circle cx="40" cy="13" r="8" fill="currentColor"/>
+      <rect x="35" y="21" width="10" height="33" rx="4" fill="currentColor"/>
+      <rect x="18" y="38" width="19" height="8"  rx="4" fill="currentColor" transform="rotate(28 18 38)"/>
+      <rect x="43" y="38" width="19" height="8"  rx="4" fill="currentColor" transform="rotate(-28 62 38)"/>
+      <rect x="12" y="48" width="10" height="10" rx="4" fill="currentColor"/>
+      <rect x="58" y="48" width="10" height="10" rx="4" fill="currentColor"/>
+      <rect x="34" y="53" width="8"  height="35" rx="4" fill="currentColor"/>
+      <rect x="38" y="53" width="8"  height="35" rx="4" fill="currentColor"/>
+      <rect x="29" y="86" width="8"  height="28" rx="4" fill="currentColor"/>
+      <rect x="43" y="86" width="8"  height="28" rx="4" fill="currentColor"/>` }
+  },
+  { id:'l-out-r-up', name:'L Out R Up', color:'#ff7b3d',
+    draw(s){ s.innerHTML=`
+      <circle cx="40" cy="13" r="8" fill="currentColor"/>
+      <rect x="35" y="21" width="10" height="33" rx="4" fill="currentColor"/>
+      <rect x="4"  y="29" width="31" height="8"  rx="4" fill="currentColor"/>
+      <rect x="4"  y="23" width="9"  height="9"  rx="4" fill="currentColor"/>
+      <rect x="43" y="2"  width="8"  height="30" rx="4" fill="currentColor" transform="rotate(-6 43 2)"/>
+      <rect x="43" y="1"  width="9"  height="9"  rx="4" fill="currentColor" transform="rotate(-6 43 1)"/>
+      <rect x="34" y="53" width="8"  height="35" rx="4" fill="currentColor"/>
+      <rect x="38" y="53" width="8"  height="35" rx="4" fill="currentColor"/>
+      <rect x="29" y="86" width="8"  height="28" rx="4" fill="currentColor"/>
+      <rect x="43" y="86" width="8"  height="28" rx="4" fill="currentColor"/>` }
+  }
+];
+
+/* ─── DOM ─── */
+const lane        = document.getElementById('lane');
+const hitZone     = document.getElementById('hitZone');
+const hzLabel     = document.getElementById('hzLabel');
+const qdots       = document.getElementById('qdots');
+const vid         = document.getElementById('vid');
+const camIdle     = document.getElementById('camIdle');
+const allowBtn    = document.getElementById('allowBtn');
+const scan        = document.getElementById('scan');
+const camGhost    = document.getElementById('camGhost');
+const ghostSVG    = document.getElementById('ghostSVG');
+const camHint     = document.getElementById('camHint');
+const hintChip    = document.getElementById('hintChip');
+const startBtn    = document.getElementById('startBtn');
+const badge       = document.getElementById('badge');
+const scoreNum    = document.getElementById('scoreNum');
+const matchFill   = document.getElementById('matchFill');
+const matchPct    = document.getElementById('matchPct');
+const cdOverlay   = document.getElementById('cdOverlay');
+const cdNum       = document.getElementById('cdNum');
+const successScreen = document.getElementById('successScreen');
+const retryBtn    = document.getElementById('retryBtn');
+
+/* ─── STATE ─── */
+let gs = 'idle'; // idle|countdown|playing|success
+let queue=[], curIdx=-1, done=0;
+let simIv=null, holdMs=0, simScore=0, scoreTgt=0;
+let cameraOn=false, tmModel=null, raf=null;
+
+/* ─── HELPERS ─── */
+const shuffle = a=>{const b=[...a];for(let i=b.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[b[i],b[j]]=[b[j],b[i]];}return b;}
+
+function setMatch(v){
+  simScore=Math.min(100,Math.max(0,v));
+  const p=Math.round(simScore);
+  matchFill.style.width=p+'%';
+  matchPct.textContent=p+'%';
+  matchFill.style.background=simScore>72?'#3dff8f':simScore>45?'#ffe83d':'#ff3de8';
+}
+
+function setHZ(color){
+  hitZone.style.borderTopColor=color||'rgba(255,255,255,.09)';
+  hitZone.style.boxShadow=color?`0 -10px 50px ${color}44`:'none';
+  hzLabel.style.color=color||'rgba(255,255,255,.15)';
+}
+
+/* ─── CAMERA ─── */
+allowBtn.addEventListener('click',async()=>{
+  try{
+    const s=await navigator.mediaDevices.getUserMedia({video:{facingMode:'user',width:640,height:480}});
+    vid.srcObject=s; vid.style.display='block';
+    camIdle.style.display='none';
+    scan.classList.add('on');
+    cameraOn=true; startBtn.disabled=false;
+    badge.textContent='Ready';
+    if(TM_MODEL_URL&&window.tmPose){
+      try{ tmModel=await tmPose.load(TM_MODEL_URL+'model.json',TM_MODEL_URL+'metadata.json'); }
+      catch(e){ tmModel=null; }
+    }
+  }catch(e){ camIdle.querySelector('.cam-txt').textContent='Camera access denied.'; }
+});
+
+/* ─── START / RETRY ─── */
+startBtn.addEventListener('click',()=>{ if(cameraOn) beginCD(); });
+retryBtn.addEventListener('click',()=>{ successScreen.classList.remove('show'); resetGame(); });
+
+function resetGame(){
+  gs='idle'; done=0; curIdx=-1; queue=[];
+  scoreNum.textContent='0'; setMatch(0); matchPct.textContent='—';
+  badge.textContent='Ready'; badge.className='badge';
+  hzLabel.textContent='get ready'; setHZ(null);
+  camHint.classList.remove('on'); camGhost.classList.remove('on');
+  qdots.innerHTML='';
+  lane.querySelectorAll('.pose-card').forEach(c=>c.remove());
+  startBtn.disabled=false;
+  if(simIv)clearInterval(simIv);
+  if(raf)cancelAnimationFrame(raf);
+}
+
+/* ─── COUNTDOWN ─── */
+function beginCD(){
+  startBtn.disabled=true; gs='countdown';
+  badge.textContent='Get ready'; badge.className='badge live';
+  queue=shuffle(POSES).slice(0,TOTAL_POSES);
+  buildDots();
+  cdOverlay.classList.add('show');
+  let n=3; cdNum.textContent=n; animCDNum();
+  const t=setInterval(()=>{
+    n--;
+    if(n<=0){ clearInterval(t); cdOverlay.classList.remove('show'); startPlaying(); }
+    else{ cdNum.textContent=n; animCDNum(); }
+  },900);
+}
+function animCDNum(){ cdNum.style.animation='none'; void cdNum.offsetWidth; cdNum.style.animation='num-pop .7s cubic-bezier(.34,1.56,.64,1)'; }
+
+/* ─── DOTS ─── */
+function buildDots(){
+  qdots.innerHTML='';
+  queue.forEach((p,i)=>{
+    const d=document.createElement('div');
+    d.className='qdot'; d.id=`qd${i}`;
+    d.style.background=p.color; d.style.boxShadow=`0 0 6px ${p.color}`;
+    qdots.appendChild(d);
+  });
+}
+function refreshDots(){
+  queue.forEach((_,i)=>{
+    const d=document.getElementById(`qd${i}`);
+    if(!d)return;
+    d.className='qdot';
+    if(i<done) d.classList.add('done');
+    else if(i===curIdx) d.classList.add('cur');
+  });
+}
+
+/* ─── PLAY ─── */
+function startPlaying(){ gs='playing'; badge.textContent='GO!'; dropNext(0); }
+
+function dropNext(idx){
+  if(idx>=TOTAL_POSES){ triggerWin(); return; }
+  curIdx=idx; refreshDots();
+  const pose=queue[idx];
+
+  // update camera side
+  scan.style.background=`linear-gradient(90deg,transparent,${pose.color}55,transparent)`;
+  hintChip.style.color=pose.color; hintChip.style.borderColor=pose.color;
+  hintChip.textContent=pose.name;
+  camGhost.style.color=pose.color;
+  pose.draw(ghostSVG);
+  setHZ(pose.color);
+
+  // clear old cards
+  lane.querySelectorAll('.pose-card').forEach(c=>c.remove());
+
+  // build card
+  const card=document.createElement('div');
+  card.className='pose-card';
+  card.style.color=pose.color;
+  card.innerHTML=`<div class="card-body"><svg viewBox="0 0 80 115" xmlns="http://www.w3.org/2000/svg"></svg></div><div class="card-lbl">${pose.name}</div>`;
+  pose.draw(card.querySelector('svg'));
+  lane.insertBefore(card,hitZone);
+
+  // measure
+  const laneH   = lane.clientHeight;
+  const hzH     = 180;
+  const cardH   = 160;
+  const startY  = -cardH - 20;
+  const landY   = laneH - hzH + hzH/2 - cardH/2 - 18;
+
+  card.style.top=startY+'px';
+
+  const t0=performance.now();
+  let landed=false;
+
+  function fall(now){
+    if(gs!=='playing'||curIdx!==idx)return;
+    const p=Math.min(1,(now-t0)/FALL_MS);
+    // ease out quart
+    const e=1-Math.pow(1-p,4);
+    card.style.top=(startY+(landY-startY)*e)+'px';
+
+    if(p<1){ raf=requestAnimationFrame(fall); }
+    else if(!landed){
+      landed=true;
+      card.classList.add('hitting');
+      camHint.classList.add('on');
+      camGhost.classList.add('on');
+      hzLabel.textContent='hold the pose';
+      scoreTarget=0; simScore=0; holdMs=0;
+      runScoring(idx, card, pose, ()=>{
+        done++; scoreNum.textContent=done;
+        card.classList.remove('hitting');
+        card.classList.add('hit-done');
+        camHint.classList.remove('on');
+        camGhost.classList.remove('on');
+        burst(pose.color);
+        refreshDots();
+        setMatch(0); holdMs=0;
+        setTimeout(()=>{ card.remove(); if(gs==='playing') dropNext(idx+1); }, 420);
+      });
+    }
+  }
+  raf=requestAnimationFrame(fall);
+}
+
+/* ─── SCORING (sim + real TM hook) ─── */
+let scoreTarget=0;
+function runScoring(idx, card, pose, onWin){
+  if(simIv) clearInterval(simIv);
+  holdMs=0; setMatch(0); scoreTarget=0;
+
+  if(tmModel){
+    // Real Teachable Machine loop
+    async function tmLoop(){
+      if(gs!=='playing'||curIdx!==idx){ return; }
+      try{
+        const {posenetOutput} = await tmModel.estimatePose(vid);
+        const preds = await tmModel.predict(posenetOutput);
+        const match = preds.find(p=>p.className.toLowerCase().includes(pose.id));
+        const conf  = match ? match.probability*100 : 0;
+        setMatch(conf);
+        if(conf>=MATCH_THRESH*100){
+          holdMs+=100;
+          const pct=Math.min(100,Math.round((holdMs/HOLD_MS)*100));
+          hzLabel.textContent=`hold — ${pct}%`;
+          if(holdMs>=HOLD_MS){ onWin(); return; }
+        } else { holdMs=Math.max(0,holdMs-60); hzLabel.textContent='match the pose'; }
+      } catch(e){}
+      setTimeout(tmLoop,100);
+    }
+    tmLoop();
+    return;
+  }
+
+  // Simulation
+  setTimeout(()=>{ if(curIdx===idx) scoreTarget=42+Math.random()*18; },400);
+  setTimeout(()=>{ if(curIdx===idx) scoreTarget=62+Math.random()*14; },1000);
+  setTimeout(()=>{ if(curIdx===idx) scoreTarget=77+Math.random()*15; },1800);
+
+  simIv=setInterval(()=>{
+    if(gs!=='playing'||curIdx!==idx){ clearInterval(simIv); return; }
+    const diff=scoreTarget-simScore;
+    simScore=Math.min(100,Math.max(0,simScore+diff*.1+(Math.random()-.5)*2.5));
+    setMatch(simScore);
+    if(simScore>=MATCH_THRESH*100){
+      holdMs+=80;
+      const pct=Math.min(100,Math.round((holdMs/HOLD_MS)*100));
+      hzLabel.textContent=`hold — ${pct}%`;
+      if(holdMs>=HOLD_MS){ clearInterval(simIv); onWin(); }
+    } else {
+      holdMs=Math.max(0,holdMs-55);
+      hzLabel.textContent=simScore>55?'almost..':'match the pose';
+    }
+  },80);
+}
+
+/* ─── WIN ─── */
+function triggerWin(){
+  gs='success'; setHZ(null);
+  camHint.classList.remove('on'); camGhost.classList.remove('on');
+  badge.textContent='Done!'; badge.className='badge done';
+  hzLabel.textContent='complete!';
+  if(simIv) clearInterval(simIv);
+  setTimeout(()=>successScreen.classList.add('show'),700);
+}
+
+/* ─── PARTICLES ─── */
+function burst(color){
+  const hz=hitZone.getBoundingClientRect();
+  const cx=hz.left+hz.width/2, cy=hz.top+hz.height/2;
+  const wrap=document.createElement('div');
+  wrap.className='burst'; wrap.style.left=cx+'px'; wrap.style.top=cy+'px';
+  document.body.appendChild(wrap);
+  for(let i=0;i<20;i++){
+    const pt=document.createElement('div'); pt.className='pt';
+    const ang=(i/20)*360, r=55+Math.random()*70;
+    const rad=ang*Math.PI/180;
+    pt.style.setProperty('--tx',Math.cos(rad)*r+'px');
+    pt.style.setProperty('--ty',Math.sin(rad)*r+'px');
+    pt.style.background=color; pt.style.left='-3.5px'; pt.style.top='-3.5px';
+    pt.style.animationDelay=Math.random()*.08+'s';
+    wrap.appendChild(pt);
+  }
+  setTimeout(()=>wrap.remove(),900);
+}
+</script>
+</body>
+</html>
